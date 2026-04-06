@@ -1,11 +1,12 @@
 # devdash
 
-`devdash` is a personal CLI dashboard for Linux developers. The first version focuses on fast capture and lightweight task tracking from the terminal.
+`devdash` is a personal CLI dashboard for Linux developers. The current version focuses on fast capture, lightweight task tracking, and a quick activity view from the terminal.
 
 ## Features
 
 - Save quick notes
-- Manage a simple todo list
+- Manage a simple todo list with priorities
+- Review recent activity in one command
 - Get a daily summary with recent notes and pending tasks
 - Store data locally using XDG directories on Linux
 
@@ -13,12 +14,21 @@
 
 ```bash
 devdash note "Remember to review operating systems notes"
-devdash todo add "Finish TypeScript CLI parser"
-devdash todo list
+devdash todo add --priority high "Finish TypeScript CLI parser"
+devdash todo list open
 devdash todo done 1
 devdash todo remove 1
+devdash recent
 devdash today
 ```
+
+## Todo Priorities
+
+`devdash todo add` accepts:
+
+- `low`
+- `medium`
+- `high`
 
 ## Development
 

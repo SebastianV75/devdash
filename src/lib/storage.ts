@@ -17,13 +17,13 @@ export class DataStore {
     const filePath = this.getFilePath();
 
     if (!fs.existsSync(filePath)) {
-      return EMPTY_DATA;
+      return createEmptyData();
     }
 
     const content = fs.readFileSync(filePath, "utf8");
 
     if (!content.trim()) {
-      return EMPTY_DATA;
+      return createEmptyData();
     }
 
     const parsed = JSON.parse(content) as Partial<DevdashData>;
@@ -56,6 +56,16 @@ export class DataStore {
 
     return path.join(baseDirectory, "devdash", "data.json");
   }
+}
+
+function createEmptyData(): DevdashData {
+  return {
+    notes: [...EMPTY_DATA.notes],
+    todos: [...EMPTY_DATA.todos],
+    captures: [...EMPTY_DATA.captures],
+    projectHistory: [...EMPTY_DATA.projectHistory],
+    sessions: [...EMPTY_DATA.sessions]
+  };
 }
 
 function normalizeTodo(raw: unknown): Todo {

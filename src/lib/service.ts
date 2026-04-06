@@ -152,6 +152,23 @@ export class DevdashService {
     return todo;
   }
 
+  reopenTodo(id: number): Todo {
+    const data = this.store.read();
+    const todo = data.todos.find((item) => item.id === id);
+
+    if (!todo) {
+      throw new Error(`Todo #${id} not found.`);
+    }
+
+    if (todo.done) {
+      todo.done = false;
+      todo.completedAt = undefined;
+      this.store.write(data);
+    }
+
+    return todo;
+  }
+
   updateTodo(id: number, input: TodoUpdateInput): Todo {
     const data = this.store.read();
     const todo = data.todos.find((item) => item.id === id);
@@ -163,7 +180,7 @@ export class DevdashService {
     const nextText = input.text === undefined ? todo.text : input.text.trim();
 
     if (!nextText) {
-      throw new Error('Usage: devdash todo add [--priority low|medium|high] [--due YYYY-MM-DD] "task"');
+      throw new Error("Todo text cannot be empty.");
     }
 
     todo.text = nextText;

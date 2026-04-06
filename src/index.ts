@@ -183,11 +183,14 @@ function handleSession(subcommand: string | undefined, args: string[]): void {
     case "start":
       startSession(args);
       return;
+    case "stop":
+      stopSession();
+      return;
     case "list":
       listSessions(args);
       return;
     default:
-      fail("Usage: devdash session <start|list>");
+      fail("Usage: devdash session <start|stop|list>");
   }
 }
 
@@ -199,8 +202,11 @@ function handleCapture(subcommand: string | undefined, args: string[]): void {
     case "list":
       listCaptures(args);
       return;
+    case "search":
+      searchCaptures(args);
+      return;
     default:
-      fail("Usage: devdash capture <add|list>");
+      fail("Usage: devdash capture <add|list|search>");
   }
 }
 
@@ -276,6 +282,32 @@ function listCaptures(args: string[]): void {
   }
 
   for (const capture of captures) {
+    const tagLabel = capture.tag ? ` [${capture.tag}]` : "";
+    console.log(
+      `${formatRelativeDate(capture.createdAt)} ${capture.type}${tagLabel} #${capture.id}: ${capture.text}`
+    );
+  }
+}
+
+function searchCaptures(args: string[]): void {
+  const query = args.join(" ").trim().toLowerCase();
+
+  if (!query) {
+    fail('Usage: devdash capture search "query"');
+  }
+
+  const data = readData();
+  const captures = data.captures.filter((capture) => {
+    const haystack = `${capture.type} ${capture.tag ?? ""} ${capture.text}`.toLowerCase();
+    return haystack.includes(query);
+  });
+
+  if (captures.length === 0) {
+    console.log(`No captures found for "${query}".`);
+    return;
+  }
+
+  for (const capture of captures.slice(0, 20)) {
     const tagLabel = capture.tag ? ` [${capture.tag}]` : "";
     console.log(
       `${formatRelativeDate(capture.createdAt)} ${capture.type}${tagLabel} #${capture.id}: ${capture.text}`
@@ -604,6 +636,20 @@ function listSessions(args: string[]): void {
   }
 }
 
+function stopSession(): void {
+  const data = readData();
+  const activeSession = getActiveSession(data);
+
+  if (!activeSession) {
+    console.log("No active session.");
+    return;
+  }
+
+  activeSession.endedAt = new Date().toISOString();
+  writeData(data);
+  console.log(`Stopped session #${activeSession.id}: ${activeSession.projectName}`);
+}
+
 function runDoctor(): void {
   const checks: DoctorCheck[] = [
     { label: "node", command: "node", versionCommand: "node --version", required: true },
@@ -652,13 +698,15 @@ function startTui(): void {
     output: process.stdout
   });
   let screen: TuiScreen = "home";
+  let busy = false;
 
   const render = (): void => {
     const data = readData();
     process.stdout.write("\x1Bc");
-    console.log("devdash");
+    console.log("DevDash~");
     console.log("");
-    console.log("Keys: [1] Home [2] Todos [3] Projects [4] Captures [5] Sessions [r] Refresh [q] Quit");
+    console.log("Keys: [1] Home [2] Todos [3] Projects [4] Captures [5] Sessions");
+    console.log("Actions: [n] Note [a] Todo [c] Capture [s] Start session [x] Stop session [r] Refresh [q] Quit");
     console.log("");
 
     switch (screen) {
@@ -685,13 +733,123 @@ function startTui(): void {
     process.stdin.setRawMode(true);
   }
 
+  const prompt = (question: string, swallowedPrefix?: string): Promise<string> =>
+    new Promise((resolve) => {
+      busy = true;
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(false);
+      }
+      clearBufferedInput();
+      rl.question(question, (answer) => {
+        if (process.stdin.isTTY) {
+          process.stdin.setRawMode(true);
+        }
+        busy = false;
+        resolve(normalizePromptAnswer(answer.trim(), swallowedPrefix));
+      });
+    });
+
+  const promptForNote = async (): Promise<void> => {
+    const text = await prompt("Note: ", "n");
+
+    if (text) {
+      addNote([text]);
+    }
+  };
+
+  const promptForTodo = async (): Promise<void> => {
+    const text = await prompt("Todo text: ", "a");
+
+    if (!text) {
+      return;
+    }
+
+    const priority =
+      (await prompt("Priority [low|medium|high] (default medium): ")) || "medium";
+    const due = await prompt("Due date YYYY-MM-DD (optional): ");
+    const args = ["--priority", priority];
+
+    if (due) {
+      args.push("--due", due);
+    }
+
+    args.push(text);
+    addTodo(args);
+  };
+
+  const promptForCapture = async (): Promise<void> => {
+    const text = await prompt("Capture text: ", "c");
+
+    if (!text) {
+      return;
+    }
+
+    const type = (await prompt("Type [note|snippet|command] (default note): ")) || "note";
+    const tag = await prompt("Tag (optional): ");
+    const args = ["--type", type];
+
+    if (tag) {
+      args.push("--tag", tag);
+    }
+
+    args.push(text);
+    addCapture(args);
+  };
+
+  const promptForSession = async (): Promise<void> => {
+    const project = await prompt("Project name: ", "s");
+
+    if (!project) {
+      return;
+    }
+
+    const note = await prompt("Session note (optional): ");
+    const args = [project];
+
+    if (note) {
+      args.push("--note", note);
+    }
+
+    startSession(args);
+  };
+
   const handleKeypress = (_: string, key: readline.Key): void => {
+    if (busy) {
+      return;
+    }
+
     if (key.name === "q" || (key.ctrl && key.name === "c")) {
       cleanup();
       return;
     }
 
     if (key.name === "r") {
+      render();
+      return;
+    }
+
+    if (key.name === "n") {
+      void promptForNote().then(render);
+      return;
+    }
+
+    if (key.name === "a") {
+      void promptForTodo().then(render);
+      return;
+    }
+
+    if (key.name === "c") {
+      void promptForCapture().then(render);
+      return;
+    }
+
+    if (key.name === "s") {
+      void promptForSession().then(render);
+      return;
+    }
+
+    if (key.name === "x") {
+      stopSession();
       render();
       return;
     }
@@ -758,6 +916,10 @@ function renderTuiHome(data: DevdashData): void {
       console.log(`  ${entry.name} (${formatRelativeDate(entry.openedAt)})`);
     }
   }
+
+  console.log("");
+  console.log("Hints:");
+  console.log("  n add note, a add todo, c add capture, s start session");
 }
 
 function renderTuiTodos(data: DevdashData): void {
@@ -809,6 +971,9 @@ function renderTuiSessions(data: DevdashData): void {
     const status = session.endedAt ? "ended" : "active";
     console.log(`  ${status} ${session.projectName} (${formatRelativeDate(session.startedAt)})`);
   }
+
+  console.log("");
+  console.log("Hint: x stops the active session");
 }
 
 function readData(): DevdashData {
@@ -1492,6 +1657,24 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+function clearBufferedInput(): void {
+  while (process.stdin.read() !== null) {
+    // Drain any buffered action key before entering readline question mode.
+  }
+}
+
+function normalizePromptAnswer(answer: string, swallowedPrefix?: string): string {
+  if (!swallowedPrefix) {
+    return answer;
+  }
+
+  if (answer.startsWith(swallowedPrefix) && answer.length > swallowedPrefix.length) {
+    return answer.slice(swallowedPrefix.length);
+  }
+
+  return answer;
+}
+
 function printHelp(): void {
   console.log(`devdash
 
@@ -1500,6 +1683,7 @@ Usage:
   devdash note "text"
   devdash capture add [--type note|snippet|command] [--tag name] "text"
   devdash capture list [--type kind] [limit]
+  devdash capture search "query"
   devdash recent [limit]
   devdash doctor
   devdash open <project-name> [--print-path]
@@ -1508,6 +1692,7 @@ Usage:
   devdash projects [query]
   devdash recent-projects [limit]
   devdash session start <project-name> [--note "text"]
+  devdash session stop
   devdash session list [limit]
   devdash todo add [--priority low|medium|high] [--due YYYY-MM-DD] "task"
   devdash todo due

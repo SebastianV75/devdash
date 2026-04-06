@@ -25,6 +25,7 @@ devdash
 devdash note "Remember to review operating systems notes"
 devdash capture add --type command --tag git "git status -sb"
 devdash capture list --type command
+devdash capture search git
 devdash todo add --priority high "Finish TypeScript CLI parser"
 devdash todo add --priority medium --due 2026-04-10 "Finish software engineering homework"
 devdash todo due
@@ -37,6 +38,7 @@ devdash open Personal-Dashboard
 devdash open zenith --print-path
 devdash recent-projects
 devdash session start devdash --note "working on TUI"
+devdash session stop
 devdash session list
 devdash doctor
 devdash todo done 1
@@ -62,6 +64,11 @@ Run `devdash` or `dsh` without arguments to open the terminal UI.
 - `3` projects
 - `4` captures
 - `5` sessions
+- `n` add note
+- `a` add todo
+- `c` add capture
+- `s` start session
+- `x` stop active session
 - `r` refresh
 - `q` quit
 
@@ -103,6 +110,7 @@ Use capture for things you want to reuse later:
 devdash capture add --type snippet --tag ts "type User = { id: number }"
 devdash capture add --type command --tag git "git log --oneline --decorate"
 devdash capture list
+devdash capture search git
 ```
 
 ## Sessions
@@ -111,6 +119,7 @@ Use sessions to mark what you are actively working on:
 
 ```bash
 devdash session start devdash --note "adding due dates"
+devdash session stop
 devdash session list
 ```
 

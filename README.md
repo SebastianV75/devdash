@@ -18,6 +18,8 @@
 devdash note "Remember to review operating systems notes"
 devdash todo add --priority high "Finish TypeScript CLI parser"
 devdash todo list open
+devdash projects
+devdash projects dash
 devdash open Personal-Dashboard
 devdash open zenith --print-path
 devdash recent-projects
@@ -33,6 +35,7 @@ devdash today
 
 - Use `devdash open <name>` to launch a project with `xdg-open`
 - Use `devdash open <name> --print-path` to only print the absolute path
+- Use `devdash projects [query]` to list detected projects and filter by name
 - Use `devdash recent-projects` to review your latest opened projects
 
 ## Todo Priorities

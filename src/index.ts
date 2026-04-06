@@ -47,6 +47,13 @@ type ProjectOpenOptions = {
   printPath: boolean;
 };
 
+type ProjectEntry = {
+  name: string;
+  path: string;
+  isGitRepo: boolean;
+  lastOpenedAt?: string;
+};
+
 const EMPTY_DATA: DevdashData = {
   notes: [],
   todos: [],
@@ -72,6 +79,9 @@ function main(): void {
       return;
     case "open":
       openProject(rest);
+      return;
+    case "projects":
+      listProjects(rest);
       return;
     case "recent-projects":
       showRecentProjects(rest);
@@ -305,6 +315,28 @@ function openProject(args: string[]): void {
   console.log(`Opened ${project.name}: ${project.path}`);
 }
 
+function listProjects(args: string[]): void {
+  const query = args.join(" ").trim().toLowerCase();
+  const data = readData();
+  const projects = getProjectEntries(data).filter((project) =>
+    query ? project.name.toLowerCase().includes(query) : true
+  );
+
+  if (projects.length === 0) {
+    console.log(query ? `No projects found for "${query}".` : "No projects found.");
+    return;
+  }
+
+  for (const project of projects) {
+    const gitLabel = project.isGitRepo ? "git" : "dir";
+    const recentLabel = project.lastOpenedAt
+      ? ` opened ${formatRelativeDate(project.lastOpenedAt)}`
+      : "";
+    console.log(`${project.name} [${gitLabel}]${recentLabel}`);
+    console.log(`  ${project.path}`);
+  }
+}
+
 function showRecentProjects(args: string[]): void {
   const limit = parseOptionalLimit(
     args[0],
@@ -531,13 +563,7 @@ function priorityWeight(priority: Priority): number {
 
 function resolveProject(query: string): { name: string; path: string } {
   const projectsRoot = getProjectsRoot();
-  const projectDirectories = fs
-    .readdirSync(projectsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => ({
-      name: entry.name,
-      path: path.join(projectsRoot, entry.name)
-    }));
+  const projectDirectories = getProjectEntries(readData());
 
   if (projectDirectories.length === 0) {
     fail(`No project directories found in ${projectsRoot}`);
@@ -579,6 +605,45 @@ function getProjectsRoot(): string {
   }
 
   return process.cwd();
+}
+
+function getProjectEntries(data: DevdashData): ProjectEntry[] {
+  const projectsRoot = getProjectsRoot();
+  const historyMap = new Map(
+    data.projectHistory.map((entry) => [entry.path, entry.openedAt])
+  );
+
+  return fs
+    .readdirSync(projectsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const projectPath = path.join(projectsRoot, entry.name);
+
+      return {
+        name: entry.name,
+        path: projectPath,
+        isGitRepo: fs.existsSync(path.join(projectPath, ".git")),
+        lastOpenedAt: historyMap.get(projectPath)
+      };
+    })
+    .sort((left, right) => {
+      if (left.lastOpenedAt && right.lastOpenedAt) {
+        return (
+          new Date(right.lastOpenedAt).getTime() -
+          new Date(left.lastOpenedAt).getTime()
+        );
+      }
+
+      if (left.lastOpenedAt) {
+        return -1;
+      }
+
+      if (right.lastOpenedAt) {
+        return 1;
+      }
+
+      return left.name.localeCompare(right.name);
+    });
 }
 
 function buildRecentActivity(data: DevdashData): RecentActivity[] {
@@ -659,6 +724,7 @@ Usage:
   devdash note "text"
   devdash recent [limit]
   devdash open <project-name> [--print-path]
+  devdash projects [query]
   devdash recent-projects [limit]
   devdash todo add [--priority low|medium|high] "task"
   devdash todo list [all|open|done]

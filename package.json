@@ -4,7 +4,8 @@
   "description": "A personal developer dashboard CLI for Linux, built with TypeScript.",
   "type": "module",
   "bin": {
-    "devdash": "./dist/index.js"
+    "devdash": "./dist/index.js",
+    "dsh": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

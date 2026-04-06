@@ -51,7 +51,17 @@ type ProjectEntry = {
   name: string;
   path: string;
   isGitRepo: boolean;
+  hasReadme: boolean;
+  hasPackageJson: boolean;
+  hasGitIgnore: boolean;
   lastOpenedAt?: string;
+};
+
+type DoctorCheck = {
+  label: string;
+  command: string;
+  versionCommand?: string;
+  required: boolean;
 };
 
 const EMPTY_DATA: DevdashData = {
@@ -80,11 +90,17 @@ function main(): void {
     case "open":
       openProject(rest);
       return;
+    case "project":
+      handleProject(rest[0], rest.slice(1));
+      return;
     case "projects":
       listProjects(rest);
       return;
     case "recent-projects":
       showRecentProjects(rest);
+      return;
+    case "doctor":
+      runDoctor();
       return;
     case "todo":
       handleTodo(rest[0], rest.slice(1));
@@ -100,6 +116,16 @@ function main(): void {
       return;
     default:
       fail(`Unknown command: ${command}`);
+  }
+}
+
+function handleProject(subcommand: string | undefined, args: string[]): void {
+  switch (subcommand) {
+    case "info":
+      showProjectInfo(args);
+      return;
+    default:
+      fail("Usage: devdash project info <project-name>");
   }
 }
 
@@ -332,9 +358,50 @@ function listProjects(args: string[]): void {
     const recentLabel = project.lastOpenedAt
       ? ` opened ${formatRelativeDate(project.lastOpenedAt)}`
       : "";
-    console.log(`${project.name} [${gitLabel}]${recentLabel}`);
+    const stackHints = [
+      project.hasPackageJson ? "node" : null,
+      project.hasReadme ? "readme" : null
+    ]
+      .filter(Boolean)
+      .join(", ");
+    const hintLabel = stackHints ? ` ${stackHints}` : "";
+    console.log(`${project.name} [${gitLabel}]${recentLabel}${hintLabel}`);
     console.log(`  ${project.path}`);
   }
+}
+
+function showProjectInfo(args: string[]): void {
+  const query = args.join(" ").trim();
+
+  if (!query) {
+    fail("Usage: devdash project info <project-name>");
+  }
+
+  const project = resolveProject(query);
+  const fullEntry = getProjectEntries(readData()).find(
+    (entry) => entry.path === project.path
+  );
+
+  if (!fullEntry) {
+    fail(`Project "${query}" not found.`);
+  }
+
+  const childDirectories = listChildDirectories(fullEntry.path);
+
+  console.log(`Project: ${fullEntry.name}`);
+  console.log(`Path: ${fullEntry.path}`);
+  console.log(`Type: ${fullEntry.isGitRepo ? "git repository" : "directory"}`);
+  console.log(`package.json: ${fullEntry.hasPackageJson ? "yes" : "no"}`);
+  console.log(`README: ${fullEntry.hasReadme ? "yes" : "no"}`);
+  console.log(`.gitignore: ${fullEntry.hasGitIgnore ? "yes" : "no"}`);
+
+  if (fullEntry.lastOpenedAt) {
+    console.log(`Last opened: ${formatRelativeDate(fullEntry.lastOpenedAt)}`);
+  }
+
+  console.log(
+    `Folders: ${childDirectories.length > 0 ? childDirectories.join(", ") : "none"}`
+  );
 }
 
 function showRecentProjects(args: string[]): void {
@@ -353,6 +420,48 @@ function showRecentProjects(args: string[]): void {
   for (const entry of history) {
     console.log(`${formatRelativeDate(entry.openedAt)} ${entry.name} -> ${entry.path}`);
   }
+}
+
+function runDoctor(): void {
+  const checks: DoctorCheck[] = [
+    { label: "node", command: "node", versionCommand: "node --version", required: true },
+    { label: "npm", command: "npm", versionCommand: "npm --version", required: true },
+    { label: "git", command: "git", versionCommand: "git --version", required: true },
+    { label: "tsc", command: "tsc", versionCommand: "tsc --version", required: false },
+    { label: "tsx", command: "tsx", versionCommand: "tsx --version", required: false },
+    { label: "xdg-open", command: "xdg-open", required: false }
+  ];
+
+  console.log("devdash doctor");
+  console.log("");
+
+  for (const check of checks) {
+    const pathResult = spawnSync(
+      "bash",
+      ["-lc", `command -v ${shellEscape(check.command)}`],
+      { encoding: "utf8" }
+    );
+    const executablePath = pathResult.stdout.trim();
+    const ok = pathResult.status === 0 && executablePath.length > 0;
+
+    if (ok) {
+      const versionOutput = check.versionCommand
+        ? spawnSync("bash", ["-lc", check.versionCommand], { encoding: "utf8" })
+        : null;
+      const output = versionOutput
+        ? [versionOutput.stdout, versionOutput.stderr].join(" ").trim().replace(/\s+/g, " ")
+        : executablePath;
+      console.log(`OK   ${check.label}: ${output || executablePath}`);
+      continue;
+    }
+
+    const level = check.required ? "ERR" : "WARN";
+    console.log(`${level} ${check.label}: not available`);
+  }
+
+  console.log("");
+  console.log(`Projects root: ${getProjectsRoot()}`);
+  console.log(`Data file: ${getDataFilePath()}`);
 }
 
 function readData(): DevdashData {
@@ -623,6 +732,9 @@ function getProjectEntries(data: DevdashData): ProjectEntry[] {
         name: entry.name,
         path: projectPath,
         isGitRepo: fs.existsSync(path.join(projectPath, ".git")),
+        hasReadme: hasAnyFile(projectPath, ["README.md", "readme.md", "README"]),
+        hasPackageJson: fs.existsSync(path.join(projectPath, "package.json")),
+        hasGitIgnore: fs.existsSync(path.join(projectPath, ".gitignore")),
         lastOpenedAt: historyMap.get(projectPath)
       };
     })
@@ -644,6 +756,23 @@ function getProjectEntries(data: DevdashData): ProjectEntry[] {
 
       return left.name.localeCompare(right.name);
     });
+}
+
+function hasAnyFile(projectPath: string, fileNames: string[]): boolean {
+  return fileNames.some((fileName) => fs.existsSync(path.join(projectPath, fileName)));
+}
+
+function listChildDirectories(projectPath: string): string[] {
+  return fs
+    .readdirSync(projectPath, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => !name.startsWith("."))
+    .sort();
+}
+
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function buildRecentActivity(data: DevdashData): RecentActivity[] {
@@ -723,7 +852,9 @@ function printHelp(): void {
 Usage:
   devdash note "text"
   devdash recent [limit]
+  devdash doctor
   devdash open <project-name> [--print-path]
+  devdash project info <project-name>
   devdash projects [query]
   devdash recent-projects [limit]
   devdash todo add [--priority low|medium|high] "task"

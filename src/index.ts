@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 type Priority = "low" | "medium" | "high";
 type TodoFilter = "all" | "open" | "done";
@@ -25,6 +26,7 @@ type Note = {
 type DevdashData = {
   notes: Note[];
   todos: Todo[];
+  projectHistory: ProjectHistoryEntry[];
 };
 
 type RecentActivity = {
@@ -35,9 +37,20 @@ type RecentActivity = {
   priority?: Priority;
 };
 
+type ProjectHistoryEntry = {
+  name: string;
+  path: string;
+  openedAt: string;
+};
+
+type ProjectOpenOptions = {
+  printPath: boolean;
+};
+
 const EMPTY_DATA: DevdashData = {
   notes: [],
-  todos: []
+  todos: [],
+  projectHistory: []
 };
 
 const PRIORITY_LABELS: Record<Priority, string> = {
@@ -56,6 +69,12 @@ function main(): void {
       return;
     case "recent":
       showRecent(rest);
+      return;
+    case "open":
+      openProject(rest);
+      return;
+    case "recent-projects":
+      showRecentProjects(rest);
       return;
     case "todo":
       handleTodo(rest[0], rest.slice(1));
@@ -190,6 +209,7 @@ function showToday(): void {
   const data = readData();
   const pendingTodos = sortTodosForDisplay(data.todos.filter((todo) => !todo.done));
   const recentNotes = data.notes.slice(0, 3);
+  const recentProjects = data.projectHistory.slice(0, 3);
 
   console.log("devdash today");
   console.log("");
@@ -211,6 +231,17 @@ function showToday(): void {
   } else {
     for (const note of recentNotes) {
       console.log(`- #${note.id} ${note.text}`);
+    }
+  }
+
+  console.log("");
+  console.log("Recent projects:");
+
+  if (recentProjects.length === 0) {
+    console.log("- No projects opened yet.");
+  } else {
+    for (const entry of recentProjects) {
+      console.log(`- ${entry.name} (${formatRelativeDate(entry.openedAt)})`);
     }
   }
 }
@@ -244,6 +275,54 @@ function showRecent(args: string[]): void {
   }
 }
 
+function openProject(args: string[]): void {
+  const { query, options } = parseOpenProjectArgs(args);
+  const project = resolveProject(query);
+  const data = readData();
+
+  data.projectHistory = [
+    {
+      name: project.name,
+      path: project.path,
+      openedAt: new Date().toISOString()
+    },
+    ...data.projectHistory.filter((entry) => entry.path !== project.path)
+  ].slice(0, 20);
+  writeData(data);
+
+  if (options.printPath) {
+    console.log(project.path);
+    return;
+  }
+
+  const result = spawnSync("xdg-open", [project.path], { stdio: "ignore" });
+
+  if (result.error || result.status !== 0) {
+    console.log(`Project path: ${project.path}`);
+    fail("Could not launch xdg-open. Try: devdash open <name> --print-path");
+  }
+
+  console.log(`Opened ${project.name}: ${project.path}`);
+}
+
+function showRecentProjects(args: string[]): void {
+  const limit = parseOptionalLimit(
+    args[0],
+    "Usage: devdash recent-projects [limit]"
+  );
+  const data = readData();
+  const history = data.projectHistory.slice(0, limit);
+
+  if (history.length === 0) {
+    console.log("No recent projects yet.");
+    return;
+  }
+
+  for (const entry of history) {
+    console.log(`${formatRelativeDate(entry.openedAt)} ${entry.name} -> ${entry.path}`);
+  }
+}
+
 function readData(): DevdashData {
   const filePath = getDataFilePath();
 
@@ -261,7 +340,10 @@ function readData(): DevdashData {
 
   return {
     notes: Array.isArray(parsed.notes) ? parsed.notes.map(normalizeNote) : [],
-    todos: Array.isArray(parsed.todos) ? parsed.todos.map(normalizeTodo) : []
+    todos: Array.isArray(parsed.todos) ? parsed.todos.map(normalizeTodo) : [],
+    projectHistory: Array.isArray(parsed.projectHistory)
+      ? parsed.projectHistory.map(normalizeProjectHistoryEntry)
+      : []
   };
 }
 
@@ -293,6 +375,19 @@ function normalizeNote(rawNote: unknown): Note {
     id: typeof note.id === "number" ? note.id : 0,
     text: typeof note.text === "string" ? note.text : "",
     createdAt: typeof note.createdAt === "string" ? note.createdAt : new Date(0).toISOString()
+  };
+}
+
+function normalizeProjectHistoryEntry(rawEntry: unknown): ProjectHistoryEntry {
+  const entry = rawEntry as Partial<ProjectHistoryEntry>;
+
+  return {
+    name: typeof entry.name === "string" ? entry.name : "unknown",
+    path: typeof entry.path === "string" ? entry.path : "",
+    openedAt:
+      typeof entry.openedAt === "string"
+        ? entry.openedAt
+        : new Date(0).toISOString()
   };
 }
 
@@ -348,6 +443,37 @@ function parseTodoAddArgs(args: string[]): { priority: Priority; text: string } 
   return { priority, text };
 }
 
+function parseOpenProjectArgs(args: string[]): {
+  query: string;
+  options: ProjectOpenOptions;
+} {
+  if (args.length === 0) {
+    fail("Usage: devdash open <project-name> [--print-path]");
+  }
+
+  const textParts: string[] = [];
+  const options: ProjectOpenOptions = {
+    printPath: false
+  };
+
+  for (const token of args) {
+    if (token === "--print-path") {
+      options.printPath = true;
+      continue;
+    }
+
+    textParts.push(token);
+  }
+
+  const query = textParts.join(" ").trim();
+
+  if (!query) {
+    fail("Usage: devdash open <project-name> [--print-path]");
+  }
+
+  return { query, options };
+}
+
 function parseTodoListFilter(rawFilter: string | undefined): TodoFilter {
   if (!rawFilter) {
     return "all";
@@ -401,6 +527,58 @@ function priorityWeight(priority: Priority): number {
     case "low":
       return 1;
   }
+}
+
+function resolveProject(query: string): { name: string; path: string } {
+  const projectsRoot = getProjectsRoot();
+  const projectDirectories = fs
+    .readdirSync(projectsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({
+      name: entry.name,
+      path: path.join(projectsRoot, entry.name)
+    }));
+
+  if (projectDirectories.length === 0) {
+    fail(`No project directories found in ${projectsRoot}`);
+  }
+
+  const normalizedQuery = query.toLowerCase();
+  const exactMatch = projectDirectories.find(
+    (project) => project.name.toLowerCase() === normalizedQuery
+  );
+
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const partialMatches = projectDirectories.filter((project) =>
+    project.name.toLowerCase().includes(normalizedQuery)
+  );
+
+  if (partialMatches.length === 1) {
+    return partialMatches[0];
+  }
+
+  if (partialMatches.length > 1) {
+    fail(
+      `Multiple projects match "${query}": ${partialMatches
+        .map((project) => project.name)
+        .join(", ")}`
+    );
+  }
+
+  fail(`Project "${query}" not found in ${projectsRoot}`);
+}
+
+function getProjectsRoot(): string {
+  const homeProjects = path.join(os.homedir(), "Documents", "Projects");
+
+  if (fs.existsSync(homeProjects)) {
+    return homeProjects;
+  }
+
+  return process.cwd();
 }
 
 function buildRecentActivity(data: DevdashData): RecentActivity[] {
@@ -480,6 +658,8 @@ function printHelp(): void {
 Usage:
   devdash note "text"
   devdash recent [limit]
+  devdash open <project-name> [--print-path]
+  devdash recent-projects [limit]
   devdash todo add [--priority low|medium|high] "task"
   devdash todo list [all|open|done]
   devdash todo done <id>

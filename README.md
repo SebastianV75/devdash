@@ -7,6 +7,8 @@
 - Save quick notes
 - Manage a simple todo list with priorities
 - Review recent activity in one command
+- Open projects from your Linux projects folder
+- Track recently opened projects
 - Get a daily summary with recent notes and pending tasks
 - Store data locally using XDG directories on Linux
 
@@ -16,11 +18,22 @@
 devdash note "Remember to review operating systems notes"
 devdash todo add --priority high "Finish TypeScript CLI parser"
 devdash todo list open
+devdash open Personal-Dashboard
+devdash open zenith --print-path
+devdash recent-projects
 devdash todo done 1
 devdash todo remove 1
 devdash recent
 devdash today
 ```
+
+## Project Commands
+
+`devdash open` searches directories in `~/Documents/Projects`.
+
+- Use `devdash open <name>` to launch a project with `xdg-open`
+- Use `devdash open <name> --print-path` to only print the absolute path
+- Use `devdash recent-projects` to review your latest opened projects
 
 ## Todo Priorities
 

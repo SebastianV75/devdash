@@ -8,20 +8,24 @@ import {
   parseDueDate,
   parsePriority
 } from "./service.js";
-import { PRIORITY_LABELS, type TuiScreen } from "./types.js";
+import { PRIORITY_LABELS, type TodoFilter, type TuiScreen } from "./types.js";
 
 type TuiState = {
   screen: TuiScreen;
   status?: string;
   selectedIndex: number;
+  todoFilter: TodoFilter;
 };
 
 const SCREEN_ORDER: TuiScreen[] = ["home", "todos", "projects", "captures", "sessions"];
+const TODO_FILTER_ORDER: TodoFilter[] = ["open", "due", "done", "all"];
+const TODO_LIST_LIMIT = 10;
 
 export function startTui(service: DevdashService): void {
   const state: TuiState = {
     screen: "home",
-    selectedIndex: 0
+    selectedIndex: 0,
+    todoFilter: "open"
   };
 
   let busy = false;
@@ -46,7 +50,7 @@ export function startTui(service: DevdashService): void {
         renderHome(service);
         break;
       case "todos":
-        renderTodos(service, state.selectedIndex);
+        renderTodos(service, state.todoFilter, state.selectedIndex);
         break;
       case "projects":
         renderProjects(service, state.selectedIndex);
@@ -60,7 +64,7 @@ export function startTui(service: DevdashService): void {
     }
 
     if (state.screen !== "home") {
-      const count = getScreenItemCount(service, state.screen);
+      const count = getScreenItemCount(service, state);
       console.log("");
       console.log(
         count > 0
@@ -70,7 +74,7 @@ export function startTui(service: DevdashService): void {
     }
 
     if (state.screen === "todos") {
-      console.log("Todo actions: [Enter] complete [e] edit selected todo");
+      renderTodoDetailLine(service, state.todoFilter, state.selectedIndex);
     }
   };
 
@@ -79,7 +83,7 @@ export function startTui(service: DevdashService): void {
   };
 
   const syncSelection = (): void => {
-    const count = getScreenItemCount(service, state.screen);
+    const count = getScreenItemCount(service, state);
 
     if (count === 0) {
       state.selectedIndex = 0;
@@ -97,7 +101,7 @@ export function startTui(service: DevdashService): void {
   };
 
   const moveSelection = (delta: number): void => {
-    const count = getScreenItemCount(service, state.screen);
+    const count = getScreenItemCount(service, state);
 
     if (count === 0) {
       render();
@@ -112,6 +116,15 @@ export function startTui(service: DevdashService): void {
     const currentIndex = SCREEN_ORDER.indexOf(state.screen);
     const nextIndex = (currentIndex + delta + SCREEN_ORDER.length) % SCREEN_ORDER.length;
     switchScreen(SCREEN_ORDER[nextIndex]);
+  };
+
+  const rotateTodoFilter = (delta: number): void => {
+    const currentIndex = TODO_FILTER_ORDER.indexOf(state.todoFilter);
+    const nextIndex = (currentIndex + delta + TODO_FILTER_ORDER.length) % TODO_FILTER_ORDER.length;
+    state.todoFilter = TODO_FILTER_ORDER[nextIndex];
+    state.selectedIndex = 0;
+    syncSelection();
+    render();
   };
 
   const ask = async (question: string, _actionKey?: string): Promise<string> => {
@@ -212,6 +225,21 @@ export function startTui(service: DevdashService): void {
 
     if (key.name === "down" || key.name === "j") {
       moveSelection(1);
+      return;
+    }
+
+    if (state.screen === "todos" && key.name === "f") {
+      rotateTodoFilter(1);
+      return;
+    }
+
+    if (state.screen === "todos" && key.name === "[") {
+      rotateTodoFilter(-1);
+      return;
+    }
+
+    if (state.screen === "todos" && key.name === "]") {
+      rotateTodoFilter(1);
       return;
     }
 
@@ -328,15 +356,21 @@ export function startTui(service: DevdashService): void {
 
     if (key.name === "return" && state.screen === "todos") {
       queueAction(async () => {
-        const todo = getSelectedTodo(service, state.selectedIndex);
+        const todo = getSelectedTodo(service, state.todoFilter, state.selectedIndex);
 
         if (!todo) {
           setStatus("No todo selected.");
           return;
         }
 
-        const completed = service.completeTodo(todo.id);
-        setStatus(`Completed todo #${completed.id}.`);
+        if (todo.done) {
+          const reopened = service.reopenTodo(todo.id);
+          setStatus(`Reopened todo #${reopened.id}.`);
+        } else {
+          const completed = service.completeTodo(todo.id);
+          setStatus(`Completed todo #${completed.id}.`);
+        }
+
         syncSelection();
       });
       return;
@@ -344,7 +378,7 @@ export function startTui(service: DevdashService): void {
 
     if (key.name === "e" && state.screen === "todos") {
       queueAction(async () => {
-        const todo = getSelectedTodo(service, state.selectedIndex);
+        const todo = getSelectedTodo(service, state.todoFilter, state.selectedIndex);
 
         if (!todo) {
           setStatus("No todo selected.");
@@ -366,6 +400,29 @@ export function startTui(service: DevdashService): void {
         });
 
         setStatus(`Updated todo #${updated.id}.`);
+        syncSelection();
+      });
+      return;
+    }
+
+    if (key.name === "d" && state.screen === "todos") {
+      queueAction(async () => {
+        const todo = getSelectedTodo(service, state.todoFilter, state.selectedIndex);
+
+        if (!todo) {
+          setStatus("No todo selected.");
+          return;
+        }
+
+        const confirmation = await ask(`Delete todo #${todo.id}? [y/N]: `);
+
+        if (confirmation.toLowerCase() !== "y") {
+          setStatus("Delete canceled.");
+          return;
+        }
+
+        const removed = service.removeTodo(todo.id);
+        setStatus(`Deleted todo #${removed.id}.`);
         syncSelection();
       });
       return;
@@ -470,10 +527,10 @@ function renderHome(service: DevdashService): void {
   }
 }
 
-function renderTodos(service: DevdashService, selectedIndex: number): void {
-  const todos = service.listTodos("open").slice(0, 10);
+function renderTodos(service: DevdashService, filter: TodoFilter, selectedIndex: number): void {
+  const todos = getVisibleTodos(service, filter);
 
-  console.log("Open todos:");
+  console.log(`Todos (${filter}):`);
   if (todos.length === 0) {
     console.log("  none");
     return;
@@ -555,8 +612,30 @@ function renderCaptureSearch(service: DevdashService, query: string): void {
 
   for (const capture of results) {
     const tagLabel = capture.tag ? ` [${capture.tag}]` : "";
-    console.log(`  ${capture.type}${tagLabel}: ${capture.text}`);
+      console.log(`  ${capture.type}${tagLabel}: ${capture.text}`);
   }
+}
+
+function renderTodoDetailLine(
+  service: DevdashService,
+  filter: TodoFilter,
+  selectedIndex: number
+): void {
+  const todo = getSelectedTodo(service, filter, selectedIndex);
+
+  if (!todo) {
+    console.log(`Todo filter: ${filter}`);
+    console.log("Actions: Enter complete/reopen · e edit · d delete · f filter");
+    return;
+  }
+
+  const status = todo.done ? "done" : "open";
+  const dueLabel = todo.dueAt ? `due ${formatDateOnly(todo.dueAt)}` : "no due";
+  const enterAction = todo.done ? "reopen" : "complete";
+  console.log(
+    `#${todo.id} · ${PRIORITY_LABELS[todo.priority]} · ${dueLabel} · ${status} · filter ${filter}`
+  );
+  console.log(`Actions: Enter ${enterAction} · e edit · d delete · f filter`);
 }
 
 function clearScreen(): void {
@@ -567,12 +646,12 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error.";
 }
 
-function getScreenItemCount(service: DevdashService, screen: TuiScreen): number {
-  switch (screen) {
+function getScreenItemCount(service: DevdashService, state: TuiState): number {
+  switch (state.screen) {
     case "home":
       return 0;
     case "todos":
-      return service.listTodos("open").slice(0, 10).length;
+      return getVisibleTodos(service, state.todoFilter).length;
     case "projects":
       return service.getProjects().slice(0, 10).length;
     case "captures":
@@ -582,6 +661,10 @@ function getScreenItemCount(service: DevdashService, screen: TuiScreen): number 
   }
 }
 
-function getSelectedTodo(service: DevdashService, selectedIndex: number) {
-  return service.listTodos("open").slice(0, 10)[selectedIndex];
+function getVisibleTodos(service: DevdashService, filter: TodoFilter) {
+  return service.listTodos(filter).slice(0, TODO_LIST_LIMIT);
+}
+
+function getSelectedTodo(service: DevdashService, filter: TodoFilter, selectedIndex: number) {
+  return getVisibleTodos(service, filter)[selectedIndex];
 }

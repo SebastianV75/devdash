@@ -1,12 +1,31 @@
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  DevdashService,
   formatDueLabel,
   parseDueDate,
   parseId,
   parseLimit,
   parsePriority
 } from "../src/lib/service.js";
+import { DataStore } from "../src/lib/storage.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  delete process.env.XDG_DATA_HOME;
+});
 
 describe("service helpers", () => {
   it("returns the fallback limit when input is missing", () => {
@@ -101,3 +120,85 @@ describe("service helpers", () => {
     Date.now = now;
   });
 });
+
+describe("todo workspace service behavior", () => {
+  it("reopens completed todos and clears completedAt", () => {
+    const service = createService();
+    const todo = service.addTodo({ text: "write notes", priority: "medium" });
+    service.completeTodo(todo.id);
+
+    const reopened = service.reopenTodo(todo.id);
+
+    expect(reopened.done).toBe(false);
+    expect(reopened.completedAt).toBeUndefined();
+  });
+
+  it("updates todo text and can clear due dates", () => {
+    const service = createService();
+    const todo = service.addTodo({
+      text: "study",
+      priority: "high",
+      dueAt: "2026-04-20T23:59:59.000Z"
+    });
+
+    const updated = service.updateTodo(todo.id, {
+      text: "study hard",
+      priority: "low",
+      dueAt: ""
+    });
+
+    expect(updated.text).toBe("study hard");
+    expect(updated.priority).toBe("low");
+    expect(updated.dueAt).toBeUndefined();
+  });
+
+  it("rejects empty todo text on update", () => {
+    const service = createService();
+    const todo = service.addTodo({ text: "study", priority: "medium" });
+
+    expect(() => service.updateTodo(todo.id, { text: "   " })).toThrow(
+      "Todo text cannot be empty."
+    );
+  });
+
+  it("supports all todo filters after state changes", () => {
+    const service = createService();
+    const openTodo = service.addTodo({ text: "open task", priority: "medium" });
+    const dueTodo = service.addTodo({
+      text: "due task",
+      priority: "high",
+      dueAt: "2026-04-10T23:59:59.000Z"
+    });
+    const doneTodo = service.addTodo({ text: "done task", priority: "low" });
+    service.completeTodo(doneTodo.id);
+
+    expect(service.listTodos("open").map((todo) => todo.id)).toEqual([
+      dueTodo.id,
+      openTodo.id
+    ]);
+    expect(service.listTodos("due").map((todo) => todo.id)).toEqual([dueTodo.id]);
+    expect(service.listTodos("done").map((todo) => todo.id)).toEqual([doneTodo.id]);
+    expect(service.listTodos("all").map((todo) => todo.id)).toEqual([
+      dueTodo.id,
+      openTodo.id,
+      doneTodo.id
+    ]);
+  });
+
+  it("removes todos permanently", () => {
+    const service = createService();
+    const todo = service.addTodo({ text: "trash me", priority: "medium" });
+
+    const removed = service.removeTodo(todo.id);
+
+    expect(removed.id).toBe(todo.id);
+    expect(service.listTodos("all")).toHaveLength(0);
+  });
+});
+
+function createService(): DevdashService {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "devdash-service-test-"));
+  tempDirs.push(tempDir);
+  process.env.XDG_DATA_HOME = tempDir;
+  return new DevdashService(new DataStore());
+}

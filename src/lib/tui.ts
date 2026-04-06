@@ -21,7 +21,7 @@ const SCREEN_ORDER: TuiScreen[] = ["home", "todos", "projects", "captures", "ses
 const TODO_FILTER_ORDER: TodoFilter[] = ["open", "due", "done", "all"];
 const TODO_LIST_LIMIT = 10;
 
-export function startTui(service: DevdashService): void {
+export function startTui(service: DevdashService, version: string): void {
   const state: TuiState = {
     screen: "home",
     selectedIndex: 0,
@@ -33,7 +33,7 @@ export function startTui(service: DevdashService): void {
   const render = (): void => {
     const data = service.getData();
     clearScreen();
-    console.log("DevDash~");
+    console.log(`DevDash~ v${version}`);
     console.log("");
 
     if (state.status) {

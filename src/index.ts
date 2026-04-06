@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { DataStore } from "./lib/storage.js";
 import {
   DevdashService,
@@ -22,6 +26,7 @@ import { startTui } from "./lib/tui.js";
 import type { CaptureType } from "./lib/types.js";
 
 const service = new DevdashService(new DataStore());
+const version = readAppVersion();
 
 async function main(): Promise<void> {
   try {
@@ -31,7 +36,7 @@ async function main(): Promise<void> {
     switch (command) {
       case undefined:
         if (process.stdin.isTTY && process.stdout.isTTY) {
-          startTui(service);
+          startTui(service, version);
           return;
         }
         printHelp();
@@ -430,6 +435,19 @@ Usage:
   devdash todo done <id>
   devdash todo remove <id>
   devdash today`);
+}
+
+function readAppVersion(): string {
+  const currentFilePath = fileURLToPath(import.meta.url);
+  const packageJsonPath = path.resolve(path.dirname(currentFilePath), "../package.json");
+
+  try {
+    const rawPackageJson = fs.readFileSync(packageJsonPath, "utf8");
+    const parsed = JSON.parse(rawPackageJson) as { version?: unknown };
+    return typeof parsed.version === "string" ? parsed.version : "dev";
+  } catch {
+    return "dev";
+  }
 }
 
 void main();

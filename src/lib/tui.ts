@@ -13,16 +13,15 @@ import { PRIORITY_LABELS, type TuiScreen } from "./types.js";
 type TuiState = {
   screen: TuiScreen;
   status?: string;
+  selectedIndex: number;
 };
 
-export function startTui(service: DevdashService): void {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
+const SCREEN_ORDER: TuiScreen[] = ["home", "todos", "projects", "captures", "sessions"];
 
+export function startTui(service: DevdashService): void {
   const state: TuiState = {
-    screen: "home"
+    screen: "home",
+    selectedIndex: 0
   };
 
   let busy = false;
@@ -47,17 +46,31 @@ export function startTui(service: DevdashService): void {
         renderHome(service);
         break;
       case "todos":
-        renderTodos(service);
+        renderTodos(service, state.selectedIndex);
         break;
       case "projects":
-        renderProjects(service);
+        renderProjects(service, state.selectedIndex);
         break;
       case "captures":
-        renderCaptures(service);
+        renderCaptures(service, state.selectedIndex);
         break;
       case "sessions":
-        renderSessions(service);
+        renderSessions(service, state.selectedIndex);
         break;
+    }
+
+    if (state.screen !== "home") {
+      const count = getScreenItemCount(service, state.screen);
+      console.log("");
+      console.log(
+        count > 0
+          ? `Selection: ${state.selectedIndex + 1}/${count} · Use ↑/↓ or j/k, Tab/Shift+Tab to switch screens`
+          : "Selection: no items on this screen"
+      );
+    }
+
+    if (state.screen === "todos") {
+      console.log("Todo actions: [Enter] complete [e] edit selected todo");
     }
   };
 
@@ -65,26 +78,94 @@ export function startTui(service: DevdashService): void {
     state.status = message;
   };
 
-  const ask = async (question: string, actionKey?: string): Promise<string> => {
+  const syncSelection = (): void => {
+    const count = getScreenItemCount(service, state.screen);
+
+    if (count === 0) {
+      state.selectedIndex = 0;
+      return;
+    }
+
+    state.selectedIndex = Math.max(0, Math.min(state.selectedIndex, count - 1));
+  };
+
+  const switchScreen = (screen: TuiScreen): void => {
+    state.screen = screen;
+    state.selectedIndex = 0;
+    syncSelection();
+    render();
+  };
+
+  const moveSelection = (delta: number): void => {
+    const count = getScreenItemCount(service, state.screen);
+
+    if (count === 0) {
+      render();
+      return;
+    }
+
+    state.selectedIndex = (state.selectedIndex + delta + count) % count;
+    render();
+  };
+
+  const moveScreen = (delta: number): void => {
+    const currentIndex = SCREEN_ORDER.indexOf(state.screen);
+    const nextIndex = (currentIndex + delta + SCREEN_ORDER.length) % SCREEN_ORDER.length;
+    switchScreen(SCREEN_ORDER[nextIndex]);
+  };
+
+  const ask = async (question: string, _actionKey?: string): Promise<string> => {
     busy = true;
     process.stdin.off("keypress", handleKeypress);
 
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(false);
-    }
-
     const answer = await new Promise<string>((resolve) => {
-      rl.question(question, resolve);
+      let value = "";
+
+      const renderPrompt = (): void => {
+        process.stdout.write(`\r\x1b[2K${question}${value}`);
+      };
+
+      const finish = (result: string): void => {
+        process.stdin.off("keypress", promptHandler);
+        process.stdout.write("\n");
+        process.stdin.on("keypress", handleKeypress);
+        busy = false;
+        resolve(result);
+      };
+
+      const promptHandler = (input: string, key: readline.Key): void => {
+        if (key.ctrl && key.name === "c") {
+          cleanup();
+          process.exit(0);
+        }
+
+        if (key.name === "escape") {
+          finish("");
+          return;
+        }
+
+        if (key.name === "return" || key.name === "enter") {
+          finish(value);
+          return;
+        }
+
+        if (key.name === "backspace") {
+          value = value.slice(0, -1);
+          renderPrompt();
+          return;
+        }
+
+        if (!key.ctrl && !key.meta && input) {
+          value += input;
+          renderPrompt();
+        }
+      };
+
+      process.stdin.on("keypress", promptHandler);
+      renderPrompt();
     });
 
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(true);
-    }
-
-    process.stdin.on("keypress", handleKeypress);
-    busy = false;
-
-    return normalizePromptAnswer(answer.trim(), actionKey);
+    return answer.trim();
   };
 
   const perform = async (action: () => Promise<void>): Promise<void> => {
@@ -95,6 +176,12 @@ export function startTui(service: DevdashService): void {
     }
 
     render();
+  };
+
+  const queueAction = (action: () => Promise<void>): void => {
+    setImmediate(() => {
+      void perform(action);
+    });
   };
 
   const handleKeypress = (_: string, key: readline.Key): void => {
@@ -108,12 +195,28 @@ export function startTui(service: DevdashService): void {
     }
 
     if (key.name === "r") {
+      syncSelection();
       render();
       return;
     }
 
+    if (key.name === "tab") {
+      moveScreen(key.shift ? -1 : 1);
+      return;
+    }
+
+    if (key.name === "up" || key.name === "k") {
+      moveSelection(-1);
+      return;
+    }
+
+    if (key.name === "down" || key.name === "j") {
+      moveSelection(1);
+      return;
+    }
+
     if (key.name === "n") {
-      void perform(async () => {
+      queueAction(async () => {
         const text = await ask("Note: ", "n");
 
         if (!text) {
@@ -123,13 +226,14 @@ export function startTui(service: DevdashService): void {
 
         const note = service.addNote(text);
         state.screen = "home";
+        state.selectedIndex = 0;
         setStatus(`Saved note #${note.id}.`);
       });
       return;
     }
 
     if (key.name === "a") {
-      void perform(async () => {
+      queueAction(async () => {
         const text = await ask("Todo text: ", "a");
 
         if (!text) {
@@ -145,13 +249,14 @@ export function startTui(service: DevdashService): void {
           dueAt: rawDueDate ? parseDueDate(rawDueDate) : undefined
         });
         state.screen = "todos";
+        state.selectedIndex = 0;
         setStatus(`Added todo #${todo.id}.`);
       });
       return;
     }
 
     if (key.name === "c") {
-      void perform(async () => {
+      queueAction(async () => {
         const text = await ask("Capture text: ", "c");
 
         if (!text) {
@@ -167,13 +272,14 @@ export function startTui(service: DevdashService): void {
           tag: tag || undefined
         });
         state.screen = "captures";
+        state.selectedIndex = 0;
         setStatus(`Saved capture #${capture.id}.`);
       });
       return;
     }
 
     if (key.name === "s") {
-      void perform(async () => {
+      queueAction(async () => {
         const query = await ask("Project name: ", "s");
 
         if (!query) {
@@ -187,22 +293,24 @@ export function startTui(service: DevdashService): void {
           note: note || undefined
         });
         state.screen = "sessions";
+        state.selectedIndex = 0;
         setStatus(`Started session #${session.id}.`);
       });
       return;
     }
 
     if (key.name === "x") {
-      void perform(async () => {
+      queueAction(async () => {
         const session = service.stopSession();
         state.screen = "sessions";
+        state.selectedIndex = 0;
         setStatus(session ? `Stopped session #${session.id}.` : "No active session.");
       });
       return;
     }
 
     if (key.name === "/") {
-      void perform(async () => {
+      queueAction(async () => {
         const query = await ask("Capture search: ", "/");
 
         if (!query) {
@@ -211,39 +319,80 @@ export function startTui(service: DevdashService): void {
         }
 
         state.screen = "captures";
+        state.selectedIndex = 0;
         setStatus(`Search ready for "${query}".`);
         renderCaptureSearch(service, query);
       });
       return;
     }
 
+    if (key.name === "return" && state.screen === "todos") {
+      queueAction(async () => {
+        const todo = getSelectedTodo(service, state.selectedIndex);
+
+        if (!todo) {
+          setStatus("No todo selected.");
+          return;
+        }
+
+        const completed = service.completeTodo(todo.id);
+        setStatus(`Completed todo #${completed.id}.`);
+        syncSelection();
+      });
+      return;
+    }
+
+    if (key.name === "e" && state.screen === "todos") {
+      queueAction(async () => {
+        const todo = getSelectedTodo(service, state.selectedIndex);
+
+        if (!todo) {
+          setStatus("No todo selected.");
+          return;
+        }
+
+        const text = await ask(`Edit todo #${todo.id} text (${todo.text}): `, "e");
+        const rawPriority = await ask(
+          `Priority [low|medium|high] (${todo.priority}): `
+        );
+        const rawDueDate = await ask(
+          `Due date YYYY-MM-DD (blank keeps current, '-' clears) (${todo.dueAt ? formatDateOnly(todo.dueAt) : 'none'}): `
+        );
+
+        const updated = service.updateTodo(todo.id, {
+          text: text || todo.text,
+          priority: rawPriority ? parsePriority(rawPriority) : todo.priority,
+          dueAt: rawDueDate ? (rawDueDate === "-" ? "" : parseDueDate(rawDueDate)) : todo.dueAt
+        });
+
+        setStatus(`Updated todo #${updated.id}.`);
+        syncSelection();
+      });
+      return;
+    }
+
     if (key.name === "1") {
-      state.screen = "home";
-      render();
+      switchScreen("home");
       return;
     }
 
     if (key.name === "2") {
-      state.screen = "todos";
-      render();
+      switchScreen("todos");
       return;
     }
 
     if (key.name === "3") {
-      state.screen = "projects";
-      render();
+      switchScreen("projects");
       return;
     }
 
     if (key.name === "4") {
-      state.screen = "captures";
-      render();
+      switchScreen("captures");
       return;
     }
 
     if (key.name === "5") {
-      state.screen = "sessions";
-      render();
+      switchScreen("sessions");
     }
   };
 
@@ -252,11 +401,10 @@ export function startTui(service: DevdashService): void {
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(false);
     }
-    rl.close();
     clearScreen();
   };
 
-  readline.emitKeypressEvents(process.stdin, rl);
+  readline.emitKeypressEvents(process.stdin);
 
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
@@ -322,7 +470,7 @@ function renderHome(service: DevdashService): void {
   }
 }
 
-function renderTodos(service: DevdashService): void {
+function renderTodos(service: DevdashService, selectedIndex: number): void {
   const todos = service.listTodos("open").slice(0, 10);
 
   console.log("Open todos:");
@@ -332,23 +480,32 @@ function renderTodos(service: DevdashService): void {
   }
 
   for (const todo of todos) {
+    const selectedLabel = todos[selectedIndex]?.id === todo.id ? ">" : " ";
     const dueLabel = todo.dueAt ? ` due ${formatDateOnly(todo.dueAt)}` : "";
-    console.log(`  #${todo.id} [${PRIORITY_LABELS[todo.priority]}]${dueLabel} ${todo.text}`);
+    console.log(`${selectedLabel} #${todo.id} [${PRIORITY_LABELS[todo.priority]}]${dueLabel} ${todo.text}`);
   }
 }
 
-function renderProjects(service: DevdashService): void {
+function renderProjects(service: DevdashService, selectedIndex: number): void {
   console.log("Projects:");
-  for (const project of service.getProjects().slice(0, 10)) {
+  const projects = service.getProjects().slice(0, 10);
+
+  if (projects.length === 0) {
+    console.log("  none");
+    return;
+  }
+
+  for (const project of projects) {
+    const selectedLabel = projects[selectedIndex]?.path === project.path ? ">" : " ";
     const recentLabel = project.lastOpenedAt
       ? ` opened ${formatRelativeDate(project.lastOpenedAt)}`
       : "";
-    console.log(`  ${project.name} [${project.stack}]${recentLabel}`);
-    console.log(`     ${project.path}`);
+    console.log(`${selectedLabel} ${project.name} [${project.stack}]${recentLabel}`);
+    console.log(`    ${project.path}`);
   }
 }
 
-function renderCaptures(service: DevdashService): void {
+function renderCaptures(service: DevdashService, selectedIndex: number): void {
   console.log("Recent captures:");
   const captures = service.listCaptures(10);
 
@@ -358,12 +515,13 @@ function renderCaptures(service: DevdashService): void {
   }
 
   for (const capture of captures) {
+    const selectedLabel = captures[selectedIndex]?.id === capture.id ? ">" : " ";
     const tagLabel = capture.tag ? ` [${capture.tag}]` : "";
-    console.log(`  ${capture.type}${tagLabel}: ${capture.text}`);
+    console.log(`${selectedLabel} ${capture.type}${tagLabel}: ${capture.text}`);
   }
 }
 
-function renderSessions(service: DevdashService): void {
+function renderSessions(service: DevdashService, selectedIndex: number): void {
   console.log("Sessions:");
   const sessions = service.getSessions(10);
 
@@ -373,10 +531,11 @@ function renderSessions(service: DevdashService): void {
   }
 
   for (const session of sessions) {
+    const selectedLabel = sessions[selectedIndex]?.id === session.id ? ">" : " ";
     const status = session.endedAt ? "ended" : "active";
     const noteLabel = session.note ? ` - ${session.note}` : "";
     console.log(
-      `  ${status} ${session.projectName} (${formatRelativeDate(session.startedAt)})${noteLabel}`
+      `${selectedLabel} ${status} ${session.projectName} (${formatRelativeDate(session.startedAt)})${noteLabel}`
     );
   }
 }
@@ -400,20 +559,29 @@ function renderCaptureSearch(service: DevdashService, query: string): void {
   }
 }
 
-function normalizePromptAnswer(answer: string, actionKey?: string): string {
-  if (!actionKey) {
-    return answer;
-  }
-
-  return answer.startsWith(actionKey) && answer.length > actionKey.length
-    ? answer.slice(actionKey.length)
-    : answer;
-}
-
 function clearScreen(): void {
   process.stdout.write("\x1Bc");
 }
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error.";
+}
+
+function getScreenItemCount(service: DevdashService, screen: TuiScreen): number {
+  switch (screen) {
+    case "home":
+      return 0;
+    case "todos":
+      return service.listTodos("open").slice(0, 10).length;
+    case "projects":
+      return service.getProjects().slice(0, 10).length;
+    case "captures":
+      return service.listCaptures(10).length;
+    case "sessions":
+      return service.getSessions(10).length;
+  }
+}
+
+function getSelectedTodo(service: DevdashService, selectedIndex: number) {
+  return service.listTodos("open").slice(0, 10)[selectedIndex];
 }

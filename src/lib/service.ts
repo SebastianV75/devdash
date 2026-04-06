@@ -20,6 +20,7 @@ import {
   type SessionStartInput,
   type Todo,
   type TodoAddInput,
+  type TodoUpdateInput,
   type TodoFilter
 } from "./types.js";
 
@@ -148,6 +149,34 @@ export class DevdashService {
       this.store.write(data);
     }
 
+    return todo;
+  }
+
+  updateTodo(id: number, input: TodoUpdateInput): Todo {
+    const data = this.store.read();
+    const todo = data.todos.find((item) => item.id === id);
+
+    if (!todo) {
+      throw new Error(`Todo #${id} not found.`);
+    }
+
+    const nextText = input.text === undefined ? todo.text : input.text.trim();
+
+    if (!nextText) {
+      throw new Error('Usage: devdash todo add [--priority low|medium|high] [--due YYYY-MM-DD] "task"');
+    }
+
+    todo.text = nextText;
+
+    if (input.priority) {
+      todo.priority = input.priority;
+    }
+
+    if (input.dueAt !== undefined) {
+      todo.dueAt = input.dueAt || undefined;
+    }
+
+    this.store.write(data);
     return todo;
   }
 

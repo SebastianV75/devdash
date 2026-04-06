@@ -86,6 +86,12 @@ export type TodoAddInput = {
   dueAt?: string;
 };
 
+export type TodoUpdateInput = {
+  text?: string;
+  priority?: Priority;
+  dueAt?: string;
+};
+
 export type CaptureAddInput = {
   type: CaptureType;
   text: string;

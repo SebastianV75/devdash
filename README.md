@@ -64,11 +64,15 @@ Run `devdash` or `dsh` without arguments to open the terminal UI.
 - `3` projects
 - `4` captures
 - `5` sessions
+- `Tab` / `Shift+Tab` switch screens
+- `↑` / `↓` or `j` / `k` move selection on list screens
 - `n` add note
 - `a` add todo
 - `c` add capture
 - `s` start session
 - `x` stop active session
+- `Enter` complete the selected open todo
+- `e` edit the selected open todo
 - `r` refresh
 - `q` quit
 
@@ -129,6 +133,28 @@ devdash session list
 npm install
 npm run dev -- today
 ```
+
+## Validation
+
+Run these before opening a PR or merging a feature branch:
+
+```bash
+npm run build
+npm run check
+npm test
+```
+
+Recommended workflow:
+
+```bash
+git checkout -b feature/your-change
+# work on the feature
+npm run build
+npm run check
+npm test
+```
+
+Keep feature work on `feature/*` branches and merge to `main` only after the validation commands pass.
 
 ## Build
 
